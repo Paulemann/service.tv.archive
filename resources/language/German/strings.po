@@ -1,0 +1,178 @@
+# XBMC Media Center language file
+# Addon Name: TV Recodings Archiver Service
+# Addon id: service.recodings.archiver
+# Addon version: 2.3
+# Addon Provider: Paulemann
+msgid ""
+msgstr ""
+"Project-Id-Version: XBMC-Addons\n"
+"Report-Msgid-Bugs-To: alanwww1@xbmc.org\n"
+"POT-Creation-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Language: de\n"
+"Plural-Forms: nplurals=2; plural=(n != 1)\n"
+
+msgctxt "#30000"
+msgid "General"
+msgstr "Allgemein"
+
+msgctxt "#30001"
+msgid "Path to VDR recordings"
+msgstr "Pfad zu VDR-Aufnahmen"
+
+msgctxt "#30002"
+msgid "Path to temporary folder"
+msgstr "Pfad zum temporären Verzeichnis"
+
+msgctxt "#30003"
+msgid "Path to destination folder"
+msgstr "Pfad zum Zielverzeichnis"
+
+msgctxt "#30004"
+msgid "Delete source after successful archiving"
+msgstr "Quelle nach erfolgreicher Archivierung löschen"
+
+msgctxt "#30005"
+msgid "Convert and archive all new recordings automatically"
+msgstr "Alle neuen Aufnahmen autom. umwandeln und archivieren"
+
+msgctxt "#30006"
+msgid "PVR client port (see config of PVR backend)"
+msgstr "PVR Client Port (siehe Konf. PVR Backend)"
+
+msgctxt "#30007"
+msgid "Time between checks (seconds)"
+msgstr "Zeit zwischen Überprüfungen (in Sek.)"
+
+msgctxt "#30008"
+msgid "Destination has windows character encoding"
+msgstr "Ziel verwendet Windows-Zeichenkodierung"
+
+msgctxt "#30010"
+msgid "Output"
+msgstr "Ausgabe"
+
+msgctxt "#30011"
+msgid "Expand title with seasosn/episode info"
+msgstr "Titel um Staffel und Folge erweitern"
+
+msgctxt "#30012"
+msgid "Expand title with channel info"
+msgstr "Titel um Sendernamen erweitern"
+
+msgctxt "#30013"
+msgid "Expand title with timer info"
+msgstr "Titel um Aufnahmedatum/-zeit erweitern"
+
+msgctxt "#30014"
+msgid "Create a separate directory per title/show name"
+msgstr "Eigenes Verzeichnis pro Titel/Serienname anlegen"
+
+msgctxt "#30015"
+msgid "Create genre directories (according to EN 300 468)"
+msgstr "Automatisch Genreordner anlegen (gem. EN 300 468)"
+
+msgctxt "#30016"
+msgid "Group TV shows in a separate directory"
+msgstr "TV-Serien in eigenem Verzeichnis gruppieren"
+
+msgctxt "#30017"
+msgid "Sort list of recordings"
+msgstr "Sortierung der Aufnahmenliste"
+
+msgctxt "#30018"
+msgid "By date (ascending)"
+msgstr "Nach Datum (aufsteigend)"
+
+msgctxt "#30019"
+msgid "By date (descending)"
+msgstr "Nach Datum (absteigend)"
+
+msgctxt "#30020"
+msgid "By title (ascending)"
+msgstr "Nach Titel (aufsteigend)"
+
+msgctxt "#30021"
+msgid "By title (descending)"
+msgstr "Nach Titel (absteigend)"
+
+msgctxt "#30022"
+msgid "Process all input streams"
+msgstr "Alle Eingabe-Streams verarbeiten"
+
+msgctxt "#30023"
+msgid "Select languages"
+msgstr "Sprachauswahl"
+
+msgctxt "#30024"
+msgid "Optimize MP2 audio"
+msgstr "MP2-Audio optimieren"
+
+msgctxt "#30025"
+msgid "Deinterlace"
+msgstr "Deinterlace"
+
+msgctxt "#30026"
+msgid "Always replace existing file"
+msgstr "Vorhandene Zieldatei überschreiben"
+
+msgctxt "#30027"
+msgid "Notify on success"
+msgstr "Nachricht nach erfolgreicher Umwandlung"
+
+msgctxt "#30028"
+msgid "Notify on failure"
+msgstr "Nachricht bei gescheiterter Umwandlung"
+
+msgctxt "#30029"
+msgid "Convert HD videos to SD format"
+msgstr "HD-Videos in SD-Format umwandeln"
+
+msgctxt "#30030"
+msgid "Subtitles"
+msgstr "Untertitel"
+
+msgctxt "#30031"
+msgid "Output format"
+msgstr "Ausgabeformat"
+
+msgctxt "#30035"
+msgid "Conversion"
+msgstr "Umwandlung"
+
+msgctxt "#30040"
+msgid "Archiving completed"
+msgstr "Archivierung abgeschlossen"
+
+msgctxt "#30041"
+msgid "Archiving failed"
+msgstr "Archivierung fehlgeschlagen"
+
+msgctxt "#30042"
+msgid "Configuration error. Check log file for details"
+msgstr "Konfigurationsfehler. Log-Datei enthält Details"
+
+msgctxt "#30043"
+msgid "Archiving started"
+msgstr "Archivierung begonnen"
+
+msgctxt "#30050"
+msgid "Select recordings to archive"
+msgstr "Aufnahmen zur Archivierung auswählen"
+
+msgctxt "#30051"
+msgid "OK"
+msgstr "OK"
+
+msgctxt "#30052"
+msgid "Cancel"
+msgstr "Abbruch"
+
+msgctxt "#30053"
+msgid "Currently no recordings are available"
+msgstr "Zurzeit sind keine Aufnahmen verfügbar"

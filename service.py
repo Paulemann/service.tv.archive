@@ -11,6 +11,7 @@ import subprocess
 import time
 import threading
 import platform
+import _strptime
 
 from contextlib import closing
 from datetime import datetime, tzinfo, timedelta

@@ -219,17 +219,20 @@ def getClients(port):
 
     my_env = os.environ.copy()
     my_env['LC_ALL'] = 'en_EN'
+
+    columns = 4 if platform.system() == 'Windows' else 6
+
     #netstat = subprocess.check_output(['netstat', '-t', '-n'], universal_newlines=True, env=my_env)
     netstat = subprocess.check_output(['netstat', '-n'], universal_newlines=True, env=my_env)
 
     #for line in netstat.split('\n')[2:]:
     for line in netstat.split('\n'):
         items = line.split()
-        if len(items) < 6 or items[0][:3].lower() != 'tcp' or items[5].lower() != 'established':
+        if len(items) < columns or items[0][:3].lower() != 'tcp' or items[-1].lower() != 'established':
             continue
 
-        localAddr, localPort = items[3].rsplit(':', 1)
-        remoteAddr, remotePort = items[4].rsplit(':', 1)
+        remoteAddr, remotePort = items[-2].rsplit(':', 1)
+        localAddr, localPort = items[-3].rsplit(':', 1)
 
         if localPort == str(port):
             clients.add(remoteAddr)

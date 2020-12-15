@@ -257,6 +257,34 @@ def isPlaying(clients, video):
     return ActivePlayer
 
 
+#def getTVHdata(logdir, title, episode, channel, starttime):
+#    logfiles = []
+
+#    for path, dirs, files in os.walk(logdir, followlinks=True):
+#        logfiles.extend(files)
+#        break
+
+#    TVHpath = ''
+#    TVHfiles = []
+
+#    for logfile in logfiles:
+#        with open(os.path.join(logdir, logfile)) as log:
+#            data = json.load(log)
+
+#            if data['title'].values()[0] == title and
+#                data['subtitle'].values()[0] and
+#                data['channel'] == channel and
+#                time.strftime(SETTING['tmFormat'], time.localtime(data['start'])) == starttime:
+#                files = [file['filename'] for file in data['files']]
+
+#                TVHpath = os.path.dirname(files[0])
+#                TVHfiles = [os.path.basename(file) for file in sorted(files)]
+
+#                break
+
+#    return TVHpath, TVHfiles
+
+
 def getVDRdata(vdrdir, title, episode, channel, starttime):
     VDRpath  = ''
     VDRfiles = []
@@ -311,7 +339,7 @@ def getShowDetails(plot):
     showSeason  = 1
     showEpisode = 0
 
-    season = re.search(r'.*([0-9]+). Staffel.*', plot)
+    season = re.search(r'.*([0-9]+)\. Staffel.*', plot)
     if not season:
         season = re.search(r'.*[sS]eason ([0-9]+).*', plot)
     if season:
@@ -333,15 +361,14 @@ class Recording():
             setattr(self, k, v)
 
         self.pvrpath, self.pvrfiles = getPVRdata(SETTING['pvrDir'], self.title, self.title2, self.channel, self.starttime)
-        if not self.pvrpath or not self.pvrfiles:
-            self.state = 'missing PVR data'
-        else:
-            self.state = 'archived' if self.isArchived() else ''
+
+        self.state = 'archived' if self.isArchived() else ''
 
         self.CONV_SUCCESS   = 0
         self.CONV_FAILED    = 1
         self.ERR_FILE_EXIST = 2
         self.ERR_NO_DESTDIR = 3
+        self.ERR_NO_PVRDATA = 4
 
 
     def _isState(self, indicator, set):
@@ -402,9 +429,8 @@ class Recording():
         files = [os.path.join(self.pvrpath, file) for file in self.pvrfiles]
 
         if len(self.pvrfiles) == 1:
-            input = self.pvrfiles[0]
+            input = files[0]
         else:
-            files = [os.path.join(self.pvrpath, file) for file in self.pvrfiles]
             input= '|'.join(files)
             input = 'concat:' + input
 
@@ -569,13 +595,17 @@ class Recording():
         if not lock.acquire(False):
             return
 
-        self.state = 'archiving'
-        status = ''
-
         try:
+            if not self.pvrpath or not self.pvrfiles:
+                status = self.ERR_NO_PVDRDATA
+                return
+            else:
+                self.state = 'archiving'
+                status = ''
+
             destDir = self._makeDestdir()
             if not destDir:
-                status =  self.ERR_NO_DESTDIR
+                status = self.ERR_NO_DESTDIR
                 return
 
             outFile = self._constructName() + SETTING['outputFmt']
@@ -600,7 +630,8 @@ class Recording():
             xbmc.log(msg='[{}] Archive process started for title \'{}\''.format(__addon_id__, title), level=xbmc.LOGNOTICE)
 
             if SETTING['notifySuccess'] or SETTING['notifyFailure']:
-                xbmc.executebuiltin('Notification({},{})'.format(__localize__(30043), self.title.encode(SETTING['locEncoding'])))
+                #xbmc.executebuiltin('Notification({},{})'.format(__localize__(30043), self.title.encode(SETTING['locEncoding'])))
+                xbmc.executebuiltin('Notification({},{})'.format(__localize__(30043), title))
 
             cmd = self._buildCmd()
             cmd.append(outPath if os.path.exists(destDir) else tmpPath )
@@ -622,7 +653,10 @@ class Recording():
             else:
                status = self.CONV_FAILED
 
-        except:
+        except Exception as e:
+            xbmc.log(msg='[{}] Archive process aborted with exception \'{}\''.format(__addon_id__, e), level=xbmc.LOGERROR)
+            status = self.CONV_FAILED
+
             if SETTING['notifyFailure']:
                 xbmc.executebuiltin('Notification({},{})'.format(__localize__(30041), self.title.encode(SETTING['locEncoding'])))
 
@@ -645,6 +679,8 @@ class Recording():
                 self.state = 'archive exists'
             elif status == self.ERR_NO_DESTDIR:
                 self.state = 'no destination'
+            elif status == self.ERR_NO_PVRDATA:
+                self.state = 'missing PVR data'
             xbmc.log(msg='[{}] Archive process finished with status \'{}\''.format(__addon_id__, self.state), level=xbmc.LOGNOTICE)
 
             lock.release()

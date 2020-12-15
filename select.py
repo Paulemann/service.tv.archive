@@ -161,8 +161,7 @@ if __name__ == '__main__':
         for index in dialog.selected:
             recs[index].isScheduled(set=True)
 
-    dialog.selected = None
-    del dialog
+    dialog = None
 
     WIN.clearProperty(__addon_id__ + '.running')
-    sys.exit(0)
+    #sys.exit(0)

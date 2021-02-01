@@ -158,7 +158,10 @@ if __name__ == '__main__':
         for index in unselect:
             recs[index].isScheduled(set=False)
 
-        for index in dialog.selected:
+        #for index in dialog.selected:
+        select = [index for index in dialog.selected if index not in preSelect]
+        for index in select:
+            xbmc.log(msg='[{}] Title \'{}\' has been selected for archiving.'.format(__addon_id__, recs[index].title.encode(locEncoding)), level=xbmc.LOGNOTICE)
             recs[index].isScheduled(set=True)
 
     dialog = None

@@ -310,7 +310,7 @@ def getVDRdata(vdrdir, title, episode, channel, starttime):
                         VDRendtime   = time.strftime(SETTING['tmFormat'], time.localtime(start + length))
                     if line[:2] == 'G ':
                         VDRgenre = line[2:].split()
-            if VDRtitle == title and VDRepisode == episode and VDRchannel == channel and VDRstarttime == starttime:
+            if VDRtitle.lower() == title.lower() and VDRepisode.lower() == episode.lower() and VDRchannel == channel and VDRstarttime == starttime:
                 VDRpath = path
                 if VDRstarttime and VDRendtime:
                     start = local2mk(VDRstarttime, SETTING['tmFormat'])
@@ -510,11 +510,18 @@ class Recording():
             if type == 'video':
                 width     = int(stream['width'])
                 height    = int(stream['height'])
-                #frameRate = int(eval(stream['avg_frame_rate']))
+                # Put the follwing 4 lines with in comment if they don't work:
+                try:
+                    frameRate = int(eval(stream['avg_frame_rate']))
+                except:
+                    continue
 
                 if SETTING['individualStreams']:
                             cmdPre.extend(['-map', '0:' + str(index)])
 
+                #if SETTING['copyVideo']:
+                #    cmdVideo = ['-c:v', 'copy']
+                #else
                 if codec != 'h264' or SETTING['deinterlaceVideo']:
                     cmdVideo = ['-c:v', 'libx264']
                     if SETTING['deinterlaceVideo']:
@@ -560,7 +567,7 @@ class Recording():
 
     def _friendly(self, text):
         # make output windows-friendly
-        return text.replace(':', ' -').replace('?', '').replace('"', '\'').replace('*', '').replace('<', '-').replace('>', '-')
+        return text.replace(':', ' -').replace('?', '').replace('"', '\'').replace('*', '').replace('<', '-').replace('>', '-').replace('/', ', ')
 
 
     def _constructName(self):
@@ -579,7 +586,7 @@ class Recording():
 
 
     def convert(self):
-        if self.isPlaying() or self.isRecording() or not self.isScheduled():
+        if self.isPlaying() or self.isRecording(): # or not self.isScheduled():
             return
 
         t = threading.Thread(target=self._convert)
@@ -635,6 +642,7 @@ class Recording():
 
             cmd = self._buildCmd()
             cmd.append(outPath if os.path.exists(destDir) else tmpPath )
+
             subprocess.check_call(cmd, preexec_fn=lambda: os.nice(19))
 
             if os.path.exists(tmpPath) and not xbmcvfs.exists(outPath.encode(SETTING['dstEncoding'])):
@@ -735,9 +743,11 @@ def addRecording(id, details):
 def updateRecordings(recList, sort=None, convertNew=False): # --> getRecordings()
     idList = [rec.id for rec in recList]
 
-    result = jsonRequest('PVR.GetRecordings')
+    result = jsonRequest('PVR.GetRecordings', params={'properties': ['isdeleted']})
     if result and 'recordings' in result:
         for recording in result['recordings']:
+            if recording['isdeleted']:
+                continue
             if recording['recordingid'] not in idList:
                 res = jsonRequest('PVR.GetRecordingDetails', params={'properties': ['title', 'plotoutline', 'plot', 'channel', 'starttime', 'endtime', 'directory', 'file'], 'recordingid': recording['recordingid']})
                 if res and 'recordingdetails' in res:
@@ -786,6 +796,7 @@ if __name__ == '__main__':
                 break
 
         if monitor.waitForAbort(float(SETTING['sleepTime'])):
+            xbmc.log(msg='[{}] Addon abort requested.'.format(__addon_id__), level=xbmc.LOGNOTICE)
             break
 else:
     loadSettings()

@@ -167,7 +167,7 @@ def jsonRequest(method, params=None, host='localhost', port=8080, username=None,
 
 def getChannel(channelid):
     pvrdetails = jsonRequest('PVR.GetChannelDetails', params={'channelid': channelid})
-    if 'channeldetails' in pvrdetails:
+    if pvrdetails and 'channeldetails' in pvrdetails:
         if pvrdetails['channeldetails']['channelid'] == channelid:
             return pvrdetails['channeldetails']['label']
 
@@ -257,6 +257,16 @@ def isPlaying(clients, video):
     return ActivePlayer
 
 
+def conv(str):
+    s = str.lower()
+    s = s.replace(u'ä', 'ae')
+    s = s.replace(u'ü', 'ue')
+    s = s.replace(u'ö', 'oe')
+    s = s.replace(u'ß', 'ss')
+
+    return s
+
+
 #def getTVHdata(logdir, title, episode, channel, starttime):
 #    logfiles = []
 
@@ -310,7 +320,7 @@ def getVDRdata(vdrdir, title, episode, channel, starttime):
                         VDRendtime   = time.strftime(SETTING['tmFormat'], time.localtime(start + length))
                     if line[:2] == 'G ':
                         VDRgenre = line[2:].split()
-            if VDRtitle.lower() == title.lower() and VDRepisode.lower() == episode.lower() and VDRchannel == channel and VDRstarttime == starttime:
+            if conv(VDRtitle) == conv(title) and conv(VDRepisode) == conv(episode) and VDRchannel == channel and VDRstarttime == starttime:
                 VDRpath = path
                 if VDRstarttime and VDRendtime:
                     start = local2mk(VDRstarttime, SETTING['tmFormat'])
@@ -372,7 +382,7 @@ class Recording():
 
 
     def _isState(self, indicator, set):
-        if not self.pvrpath or not self.pvrfiles:
+        if not self.pvrpath: # or not self.pvrfiles:
             return False
 
         semaphore = os.path.join(self.pvrpath, indicator)
@@ -603,8 +613,17 @@ class Recording():
             return
 
         try:
+            if self.title2:
+                title = '{} ({})'.format(self.title.encode(SETTING['locEncoding']), self.title2.encode(SETTING['locEncoding'])).strip()
+            else:
+                title = self.title.encode(SETTING['locEncoding'])
+            xbmc.log(msg='[{}] Archive process started for title \'{}\''.format(__addon_id__, title), level=xbmc.LOGNOTICE)
+
+            if SETTING['notifySuccess'] or SETTING['notifyFailure']:
+                xbmc.executebuiltin('Notification({},\'{}\')'.format(__localize__(30043), title))
+
             if not self.pvrpath or not self.pvrfiles:
-                status = self.ERR_NO_PVDRDATA
+                status = self.ERR_NO_PVRDATA
                 return
             else:
                 self.state = 'archiving'
@@ -630,16 +649,6 @@ class Recording():
             if os.path.exists(tmpPath):
                 os.remove(tmpPath)
 
-            if self.title2:
-                title = '{} ({})'.format(self.title.encode(SETTING['locEncoding']), self.title2.encode(SETTING['locEncoding'])).strip()
-            else:
-                title = self.title.encode(SETTING['locEncoding'])
-            xbmc.log(msg='[{}] Archive process started for title \'{}\''.format(__addon_id__, title), level=xbmc.LOGNOTICE)
-
-            if SETTING['notifySuccess'] or SETTING['notifyFailure']:
-                #xbmc.executebuiltin('Notification({},{})'.format(__localize__(30043), self.title.encode(SETTING['locEncoding'])))
-                xbmc.executebuiltin('Notification({},{})'.format(__localize__(30043), title))
-
             cmd = self._buildCmd()
             cmd.append(outPath if os.path.exists(destDir) else tmpPath )
 
@@ -650,7 +659,7 @@ class Recording():
 
             if xbmcvfs.exists(outPath.encode(SETTING['dstEncoding'])):
                 if SETTING['notifySuccess']:
-                    xbmc.executebuiltin('Notification({},{})'.format(__localize__(30040), self.title.encode(SETTING['locEncoding'])))
+                    xbmc.executebuiltin('Notification({},\'{}\')'.format(__localize__(30040), title))
 
                 self.isArchived(set=True)
 
@@ -666,7 +675,7 @@ class Recording():
             status = self.CONV_FAILED
 
             if SETTING['notifyFailure']:
-                xbmc.executebuiltin('Notification({},{})'.format(__localize__(30041), self.title.encode(SETTING['locEncoding'])))
+                xbmc.executebuiltin('Notification({},\'{}\')'.format(__localize__(30041), title))
 
             if outPath and xbmcvfs.exists(outPath.encode(SETTING['dstEncoding'])):
                 xbmcvfs.delete(outPath.encode(SETTING['dstEncoding']))

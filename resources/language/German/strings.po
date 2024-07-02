@@ -146,19 +146,19 @@ msgid "Conversion"
 msgstr "Umwandlung"
 
 msgctxt "#30040"
-msgid "Archiving completed"
+msgid "Archiving process completed"
 msgstr "Archivierung abgeschlossen"
 
 msgctxt "#30041"
-msgid "Archiving failed"
-msgstr "Archivierung fehlgeschlagen"
+msgid "Archiving process aborted"
+msgstr "Archivierung abgebrochen"
 
 msgctxt "#30042"
 msgid "Configuration error. Check log file for details"
 msgstr "Konfigurationsfehler. Log-Datei enthält Details"
 
 msgctxt "#30043"
-msgid "Archiving started"
+msgid "Archiving process started"
 msgstr "Archivierung begonnen"
 
 msgctxt "#30050"

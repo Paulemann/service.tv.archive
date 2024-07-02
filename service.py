@@ -4,16 +4,16 @@
 import os
 import re
 import sys
+import base64
 import json
-import urllib2
 import codecs
 import subprocess
 import time
 import threading
 import platform
+import requests
 import _strptime
 
-from contextlib import closing
 from datetime import datetime, tzinfo, timedelta
 from dateutil import tz
 
@@ -21,19 +21,38 @@ import xbmc
 import xbmcaddon
 import xbmcvfs
 
+import io
 
-Recs    = []
-SETTING = {}
+try:
+    from urllib.request import unquote
+except ImportError:
+    from urllib2 import unquote
 
-__addon__    = xbmcaddon.Addon()
-__setting__  = __addon__.getSetting
-__addon_id__ = __addon__.getAddonInfo('id')
-__localize__ = __addon__.getLocalizedString
-__profile__  = __addon__.getAddonInfo('profile')
+if sys.version_info.major < 3:
+    INFO = xbmc.LOGNOTICE
+    from xbmc import translatePath, makeLegalFilename, validatePath
+else:
+    INFO = xbmc.LOGINFO
+    from xbmcvfs import translatePath, makeLegalFilename, validatePath
+DEBUG = xbmc.LOGDEBUG
+
+KODIrecs = []
+SETTING  = {}
+
+__addon__      = xbmcaddon.Addon()
+__setting__    = __addon__.getSetting
+__addon_id__   = __addon__.getAddonInfo('id')
+__localize__   = __addon__.getLocalizedString
+__profile__    = __addon__.getAddonInfo('profile')
+
+ffmpeg_exec    = 'ffmpeg.exe' if platform.system() == 'Windows' else 'ffmpeg'
+ffprobe_exec   = 'ffprobe.exe' if platform.system() == 'Windows' else 'ffprobe'
 
 
-ffmpeg_exec      = 'ffmpeg.exe' if platform.system() == 'Windows' else 'ffmpeg'
-ffprobe_exec     = 'ffprobe.exe' if platform.system() == 'Windows' else 'ffprobe'
+def py(arg, charset='utf-8'):
+    if sys.version_info.major < 3:
+        return arg.decode(charset)
+    return arg
 
 
 def readSet(item, default):
@@ -67,10 +86,10 @@ def loadSettings():
     SETTING['tmFormat']          = '%Y-%m-%d %H:%M:%S'
     SETTING['locEncoding']       = sys.getfilesystemencoding()
     SETTING['dstEncoding']       = 'cp1252' if readVal('winencoding', False) else SETTING['locEncoding']
-    SETTING['tmpDir']            = xbmc.translatePath(__profile__).decode(SETTING['locEncoding'])
-    SETTING['dstDir']            = readVal('destdir', '/home/kodi/Videos').decode(SETTING['dstEncoding'])
+    SETTING['tmpDir']            = py(translatePath(__profile__), charset=SETTING['locEncoding'])
+    SETTING['dstDir']            = py(readVal('destdir', '/home/kodi/Videos'), charset=SETTING['dstEncoding'])
     SETTING['pvrPort']           = readVal('pvrport', 34890)
-    SETTING['pvrDir']            = readVal('recdir', '/home/kodi/Aufnahmen').decode(SETTING['locEncoding'])
+    SETTING['pvrDir']            = py(readVal('recdir', '/home/kodi/Aufnahmen'), charset=SETTING['locEncoding'])
     SETTING['recSort']           = readVal('recsort', 0)
     SETTING['delSource']         = readVal('delsource', False)
     SETTING['convertNew']        = readVal('addnew', False)
@@ -89,11 +108,16 @@ def loadSettings():
     SETTING['notifyFailure']     = readVal('failurenote', True)
     SETTING['col2grey']          = False #readVal('col2grey', False)
     SETTING['outputFmt']         = '.' + readVal('outfmt', 'mp4')
+    SETTING['convertUmlauts']    = False #readVal('convertUmlauts', True)
+    SETTING['useHWaccel']        = False #readVal('useHWaccel', False)
     SETTING['unknown']           = 'unknown'
     SETTING['languages']         = readSet('filter', 'deu, eng')
     SETTING['languagesSub']      = SETTING['languages']
 
     SETTING['languages'].add(SETTING['unknown'])
+
+    SETTING['username']          = 'kodi'
+    SETTING['password']          = 'Lennyboy2003'
 
 
 def utc2local(t_str, t_fmt):
@@ -115,23 +139,48 @@ def local2mk(t_str, t_fmt):
     return int(time.mktime(time.strptime(t_str, t_fmt)))
 
 
-def mixedDecoder(unicode_error):
+def utfy_dict(dic):
+    if not sys.version_info.major < 3:
+       return dic
+
+    if isinstance(dic,unicode):
+        return dic.encode("utf-8")
+    elif isinstance(dic,dict):
+        for key in dic:
+            dic[key] = utfy_dict(dic[key])
+        return dic
+    elif isinstance(dic,list):
+        new_l = []
+        for e in dic:
+            new_l.append(utfy_dict(e))
+        return new_l
+    else:
+        return dic
+
+
+#def mixed_decoder(error: UnicodeError) -> (str, int):
+#     bs: bytes = error.object[error.start: error.end]
+#     return bs.decode("cp1252"), error.start + 1
+
+def mixed_decoder(unicode_error):
     err_str = unicode_error[1]
     err_len = unicode_error.end - unicode_error.start
     next_position = unicode_error.start + err_len
     replacement = err_str[unicode_error.start:unicode_error.end].decode('cp1252')
 
-    return u'%s' % replacement, next_position
+    if sys.version_info.major < 3:
+        return u'%s' % replacement, next_position
+    else:
+        return '%s' % replacement, next_position
+
+codecs.register_error('mixed', mixed_decoder)
 
 
-codecs.register_error('mixed', mixedDecoder)
+def jsonrpc_request(method, host='localhost', params=None, port=8080, username=None, password=None):
+    url     =    'http://{}:{}/jsonrpc'.format(host, port)
+    headers =    {'Content-Type': 'application/json'}
 
-
-def jsonRequest(method, params=None, host='localhost', port=8080, username=None, password=None):
-    # e.g. KodiJRPC_Get("PVR.GetProperties", {"properties": ["recording"]})
-
-    url = 'http://{}:{}/jsonrpc'.format(host, port)
-    header = {'Content-Type': 'application/json'}
+    xbmc.log(msg='[{}] Initializing RPC request to host {} with method \'{}\'.'.format(__addon_id__, host, method), level=DEBUG)
 
     jsondata = {
         'jsonrpc': '2.0',
@@ -142,31 +191,44 @@ def jsonRequest(method, params=None, host='localhost', port=8080, username=None,
         jsondata['params'] = params
 
     if username and password:
-        base64str = base64.encodestring('{}:{}'.format(username, password))[:-1]
-        header['Authorization'] = 'Basic {}'.format(base64str)
+        auth_str = '{}:{}'.format(username, password)
+        try:
+            base64str = base64.encodestring(auth_str)[:-1]
+        except:
+            base64str = base64.b64encode(auth_str.encode()).decode()
+        headers['Authorization'] = 'Basic {}'.format(base64str)
 
     try:
-        if host == 'localhost':
+        if host in ['localhost', '127.0.0.1']:
             response = xbmc.executeJSONRPC(json.dumps(jsondata))
-            data = json.loads(response.decode(SETTING['locEncoding'], 'mixed'))
-
-            if data['id'] == method and 'result' in data:
-                return data['result']
+            if sys.version_info.major < 3:
+                data = json.loads(response.decode('utf-8', 'mixed'))
+            else:
+                data = json.loads(response)
         else:
-            request = urllib2.Request(url, json.dumps(jsondata), header)
-            with closing(urllib2.urlopen(request)) as response:
-                data = json.loads(response.read().decode(SETTING['locEncoding'], 'mixed'))
+            response = requests.post(url, data=json.dumps(jsondata), headers=headers)
+            if not response.ok:
+                xbmc.log(msg='[{}] RPC request to host {} failed with status \'{}\'.'.format(__addon_id__, host, response.status_code), level=INFO)
+                return None
 
-                if data['id'] == method and 'result' in data:
-                    return data['result']
-    except:
+            if sys.version_info.major < 3:
+                data = json.loads(response.content.decode('utf-8', 'mixed'))
+            else:
+                data = json.loads(response.text)
+
+        if data['id'] == method and 'result' in data:
+            xbmc.log(msg='[{}] RPC request to host {} returns data \'{}\'.'.format(__addon_id__, host, data['result']), level=DEBUG)
+            return utfy_dict(data['result'])
+
+    except Exception as e:
+        xbmc.log(msg='[{}] RPC request to host {} failed with error \'{}\'.'.format(__addon_id__, host, str(e)), level=INFO)
         pass
 
-    return False
+    return None
 
 
 def getChannel(channelid):
-    pvrdetails = jsonRequest('PVR.GetChannelDetails', params={'channelid': channelid})
+    pvrdetails = jsonrpc_request('PVR.GetChannelDetails', params={'channelid': channelid})
     if pvrdetails and 'channeldetails' in pvrdetails:
         if pvrdetails['channeldetails']['channelid'] == channelid:
             return pvrdetails['channeldetails']['label']
@@ -177,7 +239,7 @@ def getChannel(channelid):
 def getTimers():
     timers = []
 
-    pvrtimers = jsonRequest('PVR.GetTimers', params={'properties': ['title', 'starttime', 'endtime', 'state', 'channelid', 'summary', 'directory', 'startmargin', 'endmargin']})
+    pvrtimers = jsonrpc_request('PVR.GetTimers', params={'properties': ['title', 'starttime', 'endtime', 'state', 'channelid', 'summary', 'directory', 'startmargin', 'endmargin']})
     if pvrtimers and 'timers' in pvrtimers:
         for timer in pvrtimers['timers']:
             t = {
@@ -209,7 +271,6 @@ def isRecording(timers, title, channel, starttime, endtime):
                     continue
 
                 if rEnd <= tEnd and rEnd >= tStart:
-                #if  tStart <= rStart and tEnd >= rEnd:
                     return True
 
     return False
@@ -223,10 +284,8 @@ def getClients(port):
 
     columns = 4 if platform.system() == 'Windows' else 6
 
-    #netstat = subprocess.check_output(['netstat', '-t', '-n'], universal_newlines=True, env=my_env)
     netstat = subprocess.check_output(['netstat', '-n'], universal_newlines=True, env=my_env)
 
-    #for line in netstat.split('\n')[2:]:
     for line in netstat.split('\n'):
         items = line.split()
         if len(items) < columns or items[0][:3].lower() != 'tcp' or items[-1].lower() != 'established':
@@ -245,26 +304,60 @@ def isPlaying(clients, video):
     ActivePlayer = ''
 
     for client in clients:
-        players = jsonRequest('Player.GetActivePlayers', host=client)
+        players = jsonrpc_request('Player.GetActivePlayers', host=client, username=SETTING['username'], password=SETTING['password'])
         if players and len(players) > 0 and players[0]['type'] == 'video':
             playerid = players[0]['playerid']
-            playeritem = jsonRequest('Player.GetItem', params={'properties': ['title', 'file'], 'playerid': playerid}, host=client)
+            playeritem = jsonrpc_request('Player.GetItem', host=client, params={'properties': ['title', 'file'], 'playerid': playerid}, username=SETTING['username'], password=SETTING['password'])
             if playeritem and playeritem['item']['type'] != 'channel':
-                if video == urllib2.unquote(playeritem['item']['file']):
+                if video == unquote(playeritem['item']['file']):
                     ActivePlayer = client
                     break
 
     return ActivePlayer
 
 
-def conv(str):
-    s = str.lower()
-    s = s.replace(u'ä', 'ae')
-    s = s.replace(u'ü', 'ue')
-    s = s.replace(u'ö', 'oe')
-    s = s.replace(u'ß', 'ss')
+def scrub(text, convUmlaut=False, convSpecial=True):
+    # make output windows-friendly
+    umlautDictionary = {
+                u'Ä': 'Ae',
+                u'Ö': 'Oe',
+                u'Ü': 'Ue',
+                u'ä': 'ae',
+                u'ö': 'oe',
+                u'ü': 'ue',
+                u'ß': 'ss'
+                }
 
-    return s
+    specialDictionary = {
+                u':': ' -',
+                u'?': '',
+                u'"': '\'',
+                u'*': '',
+                u'<': '-',
+                u'>': '-',
+                u'/': ', '
+                }
+
+    #try:              # Python 2
+    if sys.version_info.major < 3:
+        umap = {ord(key):unicode(val) for key, val in umlautDictionary.items()}
+        smap = {ord(key):unicode(val) for key, val in specialDictionary.items()}
+    #except NameError: # Python 3
+    else:
+        umap = {ord(key):val for key, val in umlautDictionary.items()}
+        smap = {ord(key):val for key, val in specialDictionary.items()}
+
+    if convUmlaut:
+        text = text.translate(umap)
+
+    if convSpecial:
+        text = text.translate(smap)
+
+    return text
+
+
+def _scrub(str):
+    return scrub(str.lower(), convUmlaut=True, convSpecial=False)
 
 
 #def getTVHdata(logdir, title, episode, channel, starttime):
@@ -295,54 +388,78 @@ def conv(str):
 #    return TVHpath, TVHfiles
 
 
-def getVDRdata(vdrdir, title, episode, channel, starttime):
-    VDRpath  = ''
-    VDRfiles = []
+def updateVDRrecs(vdrdir):
+    VDRrecs = []
 
     for path, dirs, files in os.walk(vdrdir, followlinks=True):
         if path.endswith('.rec'):
             if not files:
                 continue
         if 'info' in files and '00001.ts' in files:
-            VDRtitle = VDRepisode = VDRchannel = VDRstarttime = VDRendtime = VDRgenre = ''
-            with codecs.open(os.path.join(path, 'info'), 'r', encoding=SETTING['locEncoding']) as f:
-                for line in f.readlines():
+            VDRrec = {
+                'title':     '',
+                'episode':   '',
+                'channel':   '',
+                'starttime': '',
+                'endtime':   '',
+                'genre':     ''
+                }
+            infofile = open(os.path.join(path, 'info'))
+            try:
+                lines = infofile.read().split('\n')
+                for line in lines:
                     if line[:2] == 'T ':
-                        VDRtitle = line[2:].rstrip('\n')
+                        VDRrec['title'] = line[2:].rstrip('\n')
                     if line[:2] == 'S ':
-                        VDRepisode = line[2:].rstrip('\n')
+                        VDRrec['episode'] = line[2:].rstrip('\n')
                     if line[:2] == 'C ':
-                        VDRchannel =  line[2:].split(' ', 1)[1].rstrip('\n')
+                        VDRrec['channel'] =  line[2:].split(' ', 1)[1].rstrip('\n')
                     if line[:2] == 'E ':
                         start  = int(line[2:].split(' ')[1])
                         length = int(line[2:].split(' ')[2])
-                        VDRstarttime = time.strftime(SETTING['tmFormat'], time.localtime(start))
-                        VDRendtime   = time.strftime(SETTING['tmFormat'], time.localtime(start + length))
+                        VDRrec['starttime'] = time.strftime(SETTING['tmFormat'], time.localtime(start))
+                        VDRrec['endtime']   = time.strftime(SETTING['tmFormat'], time.localtime(start + length))
                     if line[:2] == 'G ':
-                        VDRgenre = line[2:].split()
-            if conv(VDRtitle) == conv(title) and conv(VDRepisode) == conv(episode) and VDRchannel == channel and VDRstarttime == starttime:
-                VDRpath = path
-                if VDRstarttime and VDRendtime:
-                    start = local2mk(VDRstarttime, SETTING['tmFormat'])
-                    end   = local2mk(VDRendtime, SETTING['tmFormat'])
+                        VDRrec['genre'] = line[2:].split()
+                if VDRrec:
+                    VDRrec['path'] = path
+                    VDRrecs.append(VDRrec)
+            except:
+                continue
+            finally:
+                infofile.close()
 
-                    tsfiles = [os.path.join(path, file) for file in sorted(files) if file.endswith('.ts')]
-                    # Get Modification date of ts file and cut seconds
-                    #   date = int(os.path.getmtime(file)/10)*10
-                    #   mtime = time.strftime(SETTING['tmFormat'], time.localtime(date))
+    return VDRrecs
+
+
+def matchPVRdata(PVRrecs, title, episode, channel, starttime):
+    path  = ''
+    files = []
+
+    for rec in PVRrecs:
+        #if _scrub(rec['title']) == _scrub(title) and _scrub(rec['episode']) == _scrub(episode) and rec['channel'] == channel and rec['starttime'] == starttime:
+        if rec['title'] == title and rec['episode'] == episode and rec['channel'] == channel and rec['starttime'] == starttime:
+            path = rec['path']
+            if rec['starttime'] and rec['endtime']:
+                start = local2mk(rec['starttime'], SETTING['tmFormat'])
+                end   = local2mk(rec['endtime'], SETTING['tmFormat'])
+
+                tsfiles = [os.path.join(path, file) for file in sorted(os.listdir(path)) if file.endswith('.ts')]
+
+                # Get Modification date of ts file and cut seconds
+                for file in tsfiles:
+                    mtime = int(os.path.getmtime(file)/10)*10
                     # Add only files with mtime > start
-                    # Stop if file with mtime > end was added
-                    for file in tsfiles:
-                        mtime = int(os.path.getmtime(file)/10)*10
-                        if mtime > start:
-                            VDRfiles.append(file.split(os.path.sep)[-1])
-                        if mtime > end:
-                            break
-                else:
-                    VDRfiles = [file for file in sorted(files) if file.endswith('.ts')]
-                break
+                    if mtime > start:
+                        files.append(file.split(os.path.sep)[-1])
+                    # Stop if file was added with with mtime > end
+                    if mtime > end:
+                        break
+            else:
+                files = [file for file in sorted(os.listdir(path)) if file.endswith('.ts')]
+            break
 
-    return VDRpath, VDRfiles
+    return path, files
 
 
 def getShowDetails(plot):
@@ -365,20 +482,19 @@ def getShowDetails(plot):
 
 
 class Recording():
-    def __init__(self, recording, getPVRdata):
+    def __init__(self, recording):
 
         for k, v in recording.items():
             setattr(self, k, v)
 
-        self.pvrpath, self.pvrfiles = getPVRdata(SETTING['pvrDir'], self.title, self.title2, self.channel, self.starttime)
-
         self.state = 'archived' if self.isArchived() else ''
 
-        self.CONV_SUCCESS   = 0
-        self.CONV_FAILED    = 1
-        self.ERR_FILE_EXIST = 2
-        self.ERR_NO_DESTDIR = 3
-        self.ERR_NO_PVRDATA = 4
+        self.CONV_SUCCESS      = 0
+        self.ERR_NO_TARGET     = 1
+        self.ERR_TARGET_EXISTS = 2
+        self.ERR_NO_DESTDIR    = 3
+        self.ERR_NO_PVRDATA    = 4
+        self.ERR_EXCEPTION     = 5
 
 
     def _isState(self, indicator, set):
@@ -386,6 +502,7 @@ class Recording():
             return False
 
         semaphore = os.path.join(self.pvrpath, indicator)
+
         if set is not None:
             if set:
                 if os.path.exists(semaphore):
@@ -411,7 +528,7 @@ class Recording():
         if not clients:
             clients = getClients(SETTING['pvrPort'])
 
-	    return isPlaying(clients, self.file)
+        return isPlaying(clients, self.file)
 
 
     def isRecording(self, timers=None):
@@ -428,7 +545,7 @@ class Recording():
     def _analyze(self, videofile):
         try:
             data = subprocess.check_output([ffprobe_exec, '-v', 'quiet', '-print_format', 'json', '-show_format', '-show_streams', videofile,])
-            output = json.loads(data.decode(SETTING['locEncoding']))
+            output = json.loads(data)
         except subprocess.CalledProcessError as e:
             output = None
 
@@ -449,7 +566,11 @@ class Recording():
         if not data or 'streams' not in data:
             return ''
 
-        cmdPre   = [ffmpeg_exec, '-v', '10', '-i', input]
+        if SETTING['useHWaccel']:
+            cmdPre   = [ffmpeg_exec, '-hwaccel', 'auto', '-v', '10', '-i', input]
+        else:
+            cmdPre   = [ffmpeg_exec, '-v', '10', '-i', input]
+
         cmdAudio = ['-c:a', 'copy'] if not SETTING['individualStreams'] else []
         cmdVideo = ['-c:v', 'copy']
         cmdSub   = ['-c:s', 'dvdsub'] if SETTING['subtitles'] and not SETTING['individualStreams'] else []
@@ -463,7 +584,7 @@ class Recording():
             index = int(stream['index'])
 
             if 'tags' in stream and 'language' in stream['tags']:
-                lang = stream['tags']['language'] #.encode(SETTING['locEncoding']) ?
+                lang = stream['tags']['language']
             else:
                 lang = SETTING['unknown']
 
@@ -520,7 +641,7 @@ class Recording():
             if type == 'video':
                 width     = int(stream['width'])
                 height    = int(stream['height'])
-                # Put the follwing 4 lines with in comment if they don't work:
+                # Comment out the follwing 4 lines if they don't work:
                 try:
                     frameRate = int(eval(stream['avg_frame_rate']))
                 except:
@@ -549,8 +670,13 @@ class Recording():
         # insert canvas_size for subtitle before inputfile only if cmdSub is not [] (meaning subtitles
         # is True and at least one matching subtitle was found), and after we learned actual video size
         if cmdSub:
-            #cmdPre[3:3] = ['-canvas_size', '704x576']
-            cmdPre[3:3] = ['-canvas_size', str(width - 16) + 'x' + str(height)]
+            if SETTING['useHWaccel']:
+            #if '-hwaccel' in cmdPre:
+                cmdPre[5:5] = ['-canvas_size', str(width - 16) + 'x' + str(height)]
+            else:
+                #cmdPre[3:3] = ['-canvas_size', '704x576']
+                cmdPre[3:3] = ['-canvas_size', str(width - 16) + 'x' + str(height)]
+
 
         cmd = cmdPre + cmdAudio + cmdVideo + cmdSub
 
@@ -561,69 +687,76 @@ class Recording():
         dirname = ''
 
         if self.isShow() and SETTING['groupShows']:
-            dirname = self._friendly(self.directory)
+            dirname = scrub(self.directory, convUmlaut=SETTING['convertUmlauts']) #--> makeLegalFilename?
         elif SETTING['createTitle']:
-            dirname = self._friendly(self.title)
+            dirname = scrub(self.title, convUmlaut=SETTING['convertUmlauts']) #--> makeLegalFilename?
 
         if dirname:
             outdir = os.path.join(SETTING['dstDir'], dirname)
-            if not xbmcvfs.exists(outdir.encode(SETTING['dstEncoding'])):
-                xbmcvfs.mkdir(outdir.encode(SETTING['dstEncoding']))
         else:
             outdir = SETTING['dstDir']
+        if outdir[-1] != os.sep:
+            outdir += os.sep
+
+        # validatePath?
+        outdir = validatePath(outdir)
+        # Debug:
+        xbmc.log(msg='[{}] Destination Directory: \'{}\''.format(__addon_id__, outdir), level=INFO)
+
+        if not xbmcvfs.exists(outdir.encode(SETTING['dstEncoding'])):
+            xbmcvfs.mkdir(outdir.encode(SETTING['dstEncoding']))
 
         return outdir if xbmcvfs.exists(outdir.encode(SETTING['dstEncoding'])) else None
-
-
-    def _friendly(self, text):
-        # make output windows-friendly
-        return text.replace(':', ' -').replace('?', '').replace('"', '\'').replace('*', '').replace('<', '-').replace('>', '-').replace('/', ', ')
 
 
     def _constructName(self):
         name = self.title
 
         if SETTING['addEpisode'] and self.episode > 0:
-            name = name + ' ' + format(self.season) + 'x' + format(self.episode, '02d')
+            name = '{} {}x{:02d}'.format(name, self.season, self.episode)
         if self.title2:
-            name = name + ' - ' + self.title2
+            name = '{} - {}'.format(name, self.title2)
         if SETTING['addChannel'] and self.channel:
-            name = name + '_' + self.channel
+            name = '{}_{}'.format(name, self.channel)
         if SETTING['addStarttime'] and self.starttime:
             name = name + '_' + self.starttime
+            name = '{}_{}'.format(name, self.starttime)
 
-        return self._friendly(name)
+        return scrub(name, convUmlaut=SETTING['convertUmlauts']) #--> makeLegalFilename?
 
 
-    def convert(self):
-        if self.isPlaying() or self.isRecording(): # or not self.isScheduled():
+    def convert(self, event):
+        if self.isPlaying() or self.isRecording():
             return
 
-        t = threading.Thread(target=self._convert)
-        #threads.append(t)
-        #t.daemon = True
-        t.start()
+        thread = threading.Thread(target=self._convert, args=(event,))
+        thread.start()
+
+        return thread
 
 
-    def _convert(self):
+    def _convert(self, event):
         outPath = None
         tmpPath = None
+
+        status = -1
 
         if not lock.acquire(False):
             return
 
         try:
             if self.title2:
-                title = '{} ({})'.format(self.title.encode(SETTING['locEncoding']), self.title2.encode(SETTING['locEncoding'])).strip()
+                title = '{} ({})'.format(self.title, self.title2).strip()
             else:
-                title = self.title.encode(SETTING['locEncoding'])
-            xbmc.log(msg='[{}] Archive process started for title \'{}\''.format(__addon_id__, title), level=xbmc.LOGNOTICE)
+                title = self.title
+            xbmc.log(msg='[{}] Archiving process started for title \'{}\''.format(__addon_id__, title), level=INFO)
 
             if SETTING['notifySuccess'] or SETTING['notifyFailure']:
                 xbmc.executebuiltin('Notification({},\'{}\')'.format(__localize__(30043), title))
 
             if not self.pvrpath or not self.pvrfiles:
                 status = self.ERR_NO_PVRDATA
+                self.state = 'missing PVR data'
                 return
             else:
                 self.state = 'archiving'
@@ -632,73 +765,98 @@ class Recording():
             destDir = self._makeDestdir()
             if not destDir:
                 status = self.ERR_NO_DESTDIR
+                self.state = 'destination not accessible'
                 return
 
             outFile = self._constructName() + SETTING['outputFmt']
+
             outPath = os.path.join(destDir, outFile)
+            outPath = validatePath(outPath)
 
             if xbmcvfs.exists(outPath.encode(SETTING['dstEncoding'])):
                 if SETTING['overwrite']:
                     xbmcvfs.delete(outPath.encode(SETTING['dstEncoding']))
                     self.isArchived(set=False)
                 else:
-                    status = self.ERR_FILE_EXIST
+                    status = self.ERR_TARGET_EXISTS
+                    self.state = 'archive already exists'
                     return
 
             tmpPath = os.path.join(SETTING['tmpDir'], outFile)
-            if os.path.exists(tmpPath):
-                os.remove(tmpPath)
+
+            if os.path.exists(tmpPath): #--> xbmcvfs.exists?
+                os.remove(tmpPath) #--> xbmcvfs.delete?
 
             cmd = self._buildCmd()
+
+            # Test with os.path.exists if destDir is locally accessible
             cmd.append(outPath if os.path.exists(destDir) else tmpPath )
 
-            subprocess.check_call(cmd, preexec_fn=lambda: os.nice(19))
+            # Debug:
+            #xbmc.log(msg='[{}] Archiving process started with cmd \'{}\''.format(__addon_id__, ' '.join(cmd)), level=INFO)
 
-            if os.path.exists(tmpPath) and not xbmcvfs.exists(outPath.encode(SETTING['dstEncoding'])):
+            with subprocess.Popen(cmd) as proc:
+                while proc.poll() is None:
+                    if not self.isScheduled() or event.is_set():
+                        proc.kill()
+                    time.sleep(2)
+
+            if event.is_set():
+                raise Exception('archiving cancelled on exit')
+
+            if not self.isScheduled():
+                raise Exception('archiving cancelled by user')
+
+            if proc.returncode != 0:
+                raise Exception('transcoding failed')
+
+            # Debug:
+            xbmc.log(msg='[{}] Transcoding process completed. Copying file to \'{}\''.format(__addon_id__, outPath), level=INFO)
+
+            if os.path.exists(tmpPath) and not xbmcvfs.exists(outPath.encode(SETTING['dstEncoding'])): #--> xbmcvfs.exsits?
                 xbmcvfs.copy(tmpPath.encode(SETTING['locEncoding']), outPath.encode(SETTING['dstEncoding']))
 
             if xbmcvfs.exists(outPath.encode(SETTING['dstEncoding'])):
-                if SETTING['notifySuccess']:
-                    xbmc.executebuiltin('Notification({},\'{}\')'.format(__localize__(30040), title))
+                status = self.CONV_SUCCESS
+                self.state = 'archived'
 
                 self.isArchived(set=True)
-
-                status = self.CONV_SUCCESS
 
                 if SETTING['delSource']:
                     self._cleanupSource()
             else:
-               status = self.CONV_FAILED
+                status = self.ERR_NO_TARGET
+                self.state = 'couldn\'t create archive'
 
         except Exception as e:
-            xbmc.log(msg='[{}] Archive process aborted with exception \'{}\''.format(__addon_id__, e), level=xbmc.LOGERROR)
-            status = self.CONV_FAILED
-
-            if SETTING['notifyFailure']:
-                xbmc.executebuiltin('Notification({},\'{}\')'.format(__localize__(30041), title))
+            status = self.ERR_EXCEPTION
+            self.state = str(e)
 
             if outPath and xbmcvfs.exists(outPath.encode(SETTING['dstEncoding'])):
+                # Debug:
+                xbmc.log(msg='[{}] Removing target file \'{}\''.format(__addon_id__, outPath), level=INFO)
+
                 xbmcvfs.delete(outPath.encode(SETTING['dstEncoding']))
                 if not xbmcvfs.listdir(destDir.encode(SETTING['dstEncoding'])):
                     xbmcvfs.rmdir(destDir.encode(SETTING['dstEncoding']))
 
         finally:
+            if status != self.CONV_SUCCESS:
+                if SETTING['notifyFailure']:
+                    xbmc.executebuiltin('Notification({},\'{}\')'.format(__localize__(30041), title))
+                xbmc.log(msg='[{}] Archiving process for title \'{}\' aborted with status \'{}\''.format(__addon_id__, title, self.state), level=INFO)
+            else:
+                if SETTING['notifySuccess']:
+                    xbmc.executebuiltin('Notification({},\'{}\')'.format(__localize__(30040), title))
+                xbmc.log(msg='[{}] Archiving process for title \'{}\' completed successfully'.format(__addon_id__, title), level=INFO)
+
             self.isScheduled(set=False)
 
-            if tmpPath and os.path.exists(tmpPath):
-                os.remove(tmpPath)
+            if tmpPath and os.path.exists(tmpPath): #--> xbmcvfs.exists?
+                # Debug:
+                xbmc.log(msg='[{}] Removing temporary file \'{}\''.format(__addon_id__, tmpPath), level=INFO)
 
-            if status == self.CONV_SUCCESS:
-                self.state = 'archived'
-            elif status == self.CONV_FAILED:
-                self.state = 'archiving failed'
-            elif status == self.ERR_FILE_EXIST:
-                self.state = 'archive exists'
-            elif status == self.ERR_NO_DESTDIR:
-                self.state = 'no destination'
-            elif status == self.ERR_NO_PVRDATA:
-                self.state = 'missing PVR data'
-            xbmc.log(msg='[{}] Archive process finished with status \'{}\''.format(__addon_id__, self.state), level=xbmc.LOGNOTICE)
+                os.remove(tmpPath) #--> xbmcvfs.delete?
 
             lock.release()
 
@@ -728,7 +886,7 @@ class MyMonitor( xbmc.Monitor ):
         loadSettings()
 
 
-def addRecording(id, details):
+def addRecording(id, details, PVRrecs):
     if details['directory']:
         season, episode = getShowDetails(details['plot'])
     r = {
@@ -742,9 +900,14 @@ def addRecording(id, details):
         'directory':   details['directory'][1:],
         'season':      1 if not details['directory'] else season,
         'episode':     0 if not details['directory'] else episode,
-        'file':        urllib2.unquote(details['file'])
+        'file':        unquote(details['file'])
         }
-    rec = Recording(r, getVDRdata)
+    r['pvrpath'], r['pvrfiles'] = matchPVRdata(PVRrecs, r['title'], r['title2'], r['channel'], r['starttime'])
+
+    # Debug:
+    #xbmc.log(msg='[{}] Add recording for title \'{}\', path: {}, files: {}'.format(__addon_id__, r['title'], r['pvrpath'], ', '.join(r['pvrfiles'])), level=INFO)
+
+    rec  = Recording(r)
 
     return rec
 
@@ -752,16 +915,18 @@ def addRecording(id, details):
 def updateRecordings(recList, sort=None, convertNew=False): # --> getRecordings()
     idList = [rec.id for rec in recList]
 
-    result = jsonRequest('PVR.GetRecordings', params={'properties': ['isdeleted']})
+    VDRrecs = updateVDRrecs(SETTING['pvrDir'])
+
+    result = jsonrpc_request('PVR.GetRecordings', params={'properties': ['isdeleted']})
     if result and 'recordings' in result:
         for recording in result['recordings']:
             if recording['isdeleted']:
                 continue
             if recording['recordingid'] not in idList:
-                res = jsonRequest('PVR.GetRecordingDetails', params={'properties': ['title', 'plotoutline', 'plot', 'channel', 'starttime', 'endtime', 'directory', 'file'], 'recordingid': recording['recordingid']})
+                res = jsonrpc_request('PVR.GetRecordingDetails', params={'properties': ['title', 'plotoutline', 'plot', 'channel', 'starttime', 'endtime', 'directory', 'file'], 'recordingid': recording['recordingid']})
                 if res and 'recordingdetails' in res:
                     details = res['recordingdetails']
-                    rec = addRecording(recording['recordingid'], details)
+                    rec = addRecording(recording['recordingid'], details, VDRrecs)
                     if convertNew and not rec.isArchived():
                         rec.isScheduled(set=True)
                     recList.append(rec)
@@ -787,25 +952,35 @@ def updateRecordings(recList, sort=None, convertNew=False): # --> getRecordings(
             # sort by title (case-insensitive, descending)
             recList.sort(key=lambda r: r.title.lower(), reverse=True)
 
+    return recList
+
 
 if __name__ == '__main__':
     lock = threading.Lock()
+    stopEvent = threading.Event()
+    thread = None
+
     monitor = MyMonitor()
-    xbmc.log(msg='[{}] Addon started.'.format(__addon_id__), level=xbmc.LOGNOTICE)
+    xbmc.log(msg='[{}] Addon started.'.format(__addon_id__), level=INFO)
     loadSettings()
 
-    #Recs = []
     os.nice(19)
 
     while not monitor.abortRequested():
-        updateRecordings(Recs, sort=SETTING['recSort'], convertNew=SETTING['convertNew'])
-        for rec in Recs:
+        #KODIrecs = updateRecordings(KODIrecs, sort=SETTING['recSort'], convertNew=SETTING['convertNew'])
+        updateRecordings(KODIrecs, sort=SETTING['recSort'], convertNew=SETTING['convertNew'])
+
+        for rec in KODIrecs:
             if rec.isScheduled():
-                rec.convert()
+                thread = rec.convert(stopEvent)
                 break
 
         if monitor.waitForAbort(float(SETTING['sleepTime'])):
-            xbmc.log(msg='[{}] Addon abort requested.'.format(__addon_id__), level=xbmc.LOGNOTICE)
+            xbmc.log(msg='[{}] Addon abort requested.'.format(__addon_id__), level=INFO)
+
+            stopEvent.set()
+            thread.join()
+
             break
 else:
     loadSettings()
